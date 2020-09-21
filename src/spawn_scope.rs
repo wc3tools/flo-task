@@ -1,13 +1,45 @@
-# flo-task
+//! RAII guard used to notify child tasks that the parent has been dropped.
 
-Async task utilities.
+use tokio::sync::watch::{channel, Receiver, Sender};
 
-## `SpawnScope`
+#[derive(Debug)]
+pub struct SpawnScope {
+    tx: Option<Sender<()>>,
+    rx: Receiver<()>,
+}
 
-RAII guard used to notify child tasks that the parent has been dropped.
-One use-case of this is to implement gracefully shut down a group of child tasks.
+impl SpawnScope {
+    pub fn new() -> Self {
+        let (tx, rx) = channel(());
+        Self { tx: Some(tx), rx }
+    }
 
-```rust
+    pub fn handle(&self) -> SpawnScopeHandle {
+        let rx = self.rx.clone();
+        SpawnScopeHandle(rx)
+    }
+
+    pub fn close(&mut self) {
+        self.tx.take();
+    }
+}
+
+#[derive(Debug)]
+pub struct SpawnScopeHandle(Receiver<()>);
+
+impl Clone for SpawnScopeHandle {
+    fn clone(&self) -> Self {
+        let rx = self.0.clone();
+        SpawnScopeHandle(rx)
+    }
+}
+
+impl SpawnScopeHandle {
+    pub async fn left(&mut self) {
+        while let Some(_) = self.0.recv().await {}
+    }
+}
+
 #[tokio::test]
 async fn test_initial_value() {
     use std::future::Future;
@@ -43,4 +75,3 @@ async fn test_initial_value() {
     assert!(v2 > 0);
     assert!(v3 > 0);
 }
-```
