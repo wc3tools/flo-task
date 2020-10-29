@@ -1,5 +1,6 @@
 //! RAII guard used to notify child tasks that the parent has been dropped.
 
+use std::future::Future;
 use tokio::sync::watch::{channel, Receiver, Sender};
 
 #[derive(Debug)]
@@ -17,6 +18,18 @@ impl SpawnScope {
     pub fn handle(&self) -> SpawnScopeHandle {
         let rx = self.rx.clone();
         SpawnScopeHandle(rx)
+    }
+
+    pub fn spawn<F>(&self, future: F) 
+    where F: Future<Output = ()> + Send + 'static
+    {
+        let mut handle = self.handle();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = handle.left() => {},
+                _ = future => {},
+            }
+        });
     }
 
     pub fn close(&mut self) {
@@ -38,10 +51,23 @@ impl SpawnScopeHandle {
     pub async fn left(&mut self) {
         while let Some(_) = self.0.recv().await {}
     }
+
+
+    pub fn spawn<F>(&self, future: F) 
+    where F: Future<Output = ()> + Send + 'static
+    {
+        let mut handle = self.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = handle.left() => {},
+                _ = future => {},
+            }
+        });
+    }
 }
 
 #[tokio::test]
-async fn test_initial_value() {
+async fn test_drop() {
     use std::future::Future;
     use std::time::Duration;
     use tokio::time::delay_for;
@@ -74,4 +100,30 @@ async fn test_initial_value() {
     assert!(v1 > 0);
     assert!(v2 > 0);
     assert!(v3 > 0);
+}
+
+#[tokio::test]
+async fn test_spawn() {
+    use tokio::sync::oneshot::*;
+    
+    let (tx, rx) = channel();
+
+    struct Guard(Option<Sender<()>>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            self.0.take().unwrap().send(()).ok();
+        }
+    }
+
+    let g = Guard(tx.into());
+    let scope = SpawnScope::new();
+
+    scope.spawn(async move {
+        futures::future::pending::<()>().await;
+        drop(g)
+    });
+
+    drop(scope);
+
+    rx.await.unwrap();
 }

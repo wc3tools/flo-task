@@ -6,3 +6,6 @@ edition = "2018"
 
 [dependencies]
 tokio = { version = "0.2", features = ["sync", "macros", "time", "rt-core"] }
+
+[dev-dependencies]
+futures = "0.3"
